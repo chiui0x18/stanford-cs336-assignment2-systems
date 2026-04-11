@@ -13,7 +13,8 @@ from torch import Tensor
 from jaxtyping import Int64
 import click
 
-from cs336_basics.model import BasicsTransformerLM
+#from cs336_basics.model import BasicsTransformerLM
+from cs336_basics.transformer import TransformerModel
 from cs336_basics.nn_utils import cross_entropy
 
 CUDA = "cuda"
@@ -132,7 +133,9 @@ def hyperparam_space(
         to_dicts("d_ff", d_ff),
         to_dicts("num_layers", num_layers),
         to_dicts("num_heads", num_heads),
-        to_dicts("context_length", ctx_len),
+        #to_dicts("context_length", ctx_len), # for staff impl BasicsTransformerLM
+        to_dicts("context_len", ctx_len), # for home-made TransformerModel
+
     ]
     # merge kwargs from different dict in ds together and yield
     for ds in arrange(*iters):
@@ -166,6 +169,9 @@ def arrange_fn(
 
 def to_dicts(key: str, ls: Iterable[Any]) -> Iterable[dict]:
     return [{key: v} for v in ls]
+
+def eprint(msg: str) -> None:
+    print(msg, file=sys.stderr)
 
 @click.command("naive-benchmark", context_settings={"show_default": True})
 @click.argument(
@@ -255,28 +261,28 @@ def run(
             1024,
             1280,
             1600,
-            #2560,
+            2560,
         ],
         d_ff=[
             3072,
             4096,
             5120,
             6400,
-            #10240,
+            10240,
         ],
         num_layers=[
             12,
             24,
             36,
             48,
-            #32,
+            32,
         ],
         num_heads=[
             12,
             16,
             20,
             25,
-            #32,
+            32,
         ],
         ctx_len=[
             128,
@@ -297,20 +303,27 @@ def run(
     for params in params_space:
         # parameter combo / case identifier
         legend = ",".join([f"{k}={v}" for k, v in params.items()])
-        print(f'Start benchmarking case {legend}', file=sys.stderr)
+        eprint(f'Start benchmarking case {legend}')
 
         try:
-            model = BasicsTransformerLM(
+            #model = BasicsTransformerLM(
+            #    vocab_size=vocab_size,
+            #    rope_theta=rope_theta,
+            #    **params,
+            #)
+            #eprint(f'{legend} - Model initiated in physical RAM')
+            # move module's parameters to specified device
+            #model.to(device=device)
+            model = TransformerModel(
                 vocab_size=vocab_size,
                 rope_theta=rope_theta,
+                device=CUDA,
+                dtype=torch.float32,
                 **params,
             )
-            print(f'{legend} - Model initiated in physical RAM', file=sys.stderr)
-            # move module's parameters to specified device
-            model.to(device=device)
-            print(f'{legend} - Model moved to GPU', file=sys.stderr)
+            eprint(f'Model of case {legend} moved to GPU memory')
         except Exception as e:
-            print(f"Error when initiating model or moving it to GPU: {e}", file=sys.stderr)
+            eprint(f"Error when initiating model of case {legend} and moving it to GPU memory: {e}")
             if snapshot_cuda_mem_usage:
                 torch.cuda.memory._dump_snapshot(mem_snapshot_fp)
             del model
@@ -326,11 +339,12 @@ def run(
                 model,
                 vocab_size=vocab_size,
                 batch_size=batch_size,
-                ctx_len=params["context_length"],
+                #ctx_len=params["context_length"], # for staff impl BasicsTransformerLM
+                ctx_len=params["context_len"],
                 backward=backward,
             )
         except Exception as e:
-            print(f"Error when benchmarking case {legend}: {e}", file=sys.stderr)
+            eprint(f"Error when benchmarking case {legend}: {e}")
             bench_err = str(e)
 
         if bench_stats:
@@ -344,7 +358,7 @@ def run(
         del model
         gc.collect()
         torch.cuda.empty_cache()
-        print(f'Done benchmarking case {legend}', file=sys.stderr)
+        eprint(f'Done benchmarking case {legend}')
 
     if snapshot_cuda_mem_usage:
         torch.cuda.memory._dump_snapshot(mem_snapshot_fp)
