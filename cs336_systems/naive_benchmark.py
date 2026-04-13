@@ -10,6 +10,7 @@ import timeit
 import pandas as pd
 import torch
 from torch import Tensor
+from torch.cuda import nvtx
 from jaxtyping import Int64
 import click
 
@@ -93,20 +94,24 @@ class Bench:
 
         def fn_to_benchmark():
             """Wrap code to benchmark into a callable w/ 0 params to align w/ timeit interface."""
-            pred = model(x)
+            with nvtx.range('Forward pass'):
+                pred = model(x)
             if backward:
                 loss = cross_entropy(pred, targets)
-                loss.backward()
+                with nvtx.range('Backward pass'):
+                    loss.backward()
             if self.device == CUDA and torch.cuda.is_available():
                 torch.cuda.synchronize()
 
-        for _ in range(self.warmup_runs):
-            fn_to_benchmark()
+        with nvtx.range('IGNORED: warmup runs'):
+            for _ in range(self.warmup_runs):
+                fn_to_benchmark()
 
         # Repeat executing timeit() for self.timed_runs times
-        measured_durations = timeit.repeat(
-            fn_to_benchmark, repeat=self.timed_runs, number=1
-        )
+        with nvtx.range('Timed runs'):
+            measured_durations = timeit.repeat(
+                fn_to_benchmark, repeat=self.timed_runs, number=1
+            )
         # compute statistical summary of measured durations
         t_measured_durations = torch.tensor(measured_durations, dtype=torch.float32)
         return t_measured_durations.mean().item(), t_measured_durations.std().item()
@@ -334,18 +339,19 @@ def run(
         # start benchmark runs
         bench_stats = None
         bench_err = None
-        try:
-            bench_stats = bench.run(
-                model,
-                vocab_size=vocab_size,
-                batch_size=batch_size,
-                #ctx_len=params["context_length"], # for staff impl BasicsTransformerLM
-                ctx_len=params["context_len"],
-                backward=backward,
-            )
-        except Exception as e:
-            eprint(f"Error when benchmarking case {legend}: {e}")
-            bench_err = str(e)
+        with nvtx.range('Benchmark run for model {legend}', legend=legend):
+            try:
+                bench_stats = bench.run(
+                    model,
+                    vocab_size=vocab_size,
+                    batch_size=batch_size,
+                    #ctx_len=params["context_length"], # for staff impl BasicsTransformerLM
+                    ctx_len=params["context_len"],
+                    backward=backward,
+                )
+            except Exception as e:
+                eprint(f"Error when benchmarking case {legend}: {e}")
+                bench_err = str(e)
 
         if bench_stats:
             mean, std = bench_stats
